@@ -1,0 +1,20 @@
+{
+    "files.associations": {
+        "*.cjson": "jsonc",
+        "*.wxss": "css",
+        "*.wxs": "javascript",
+        "bsp_lcd.h": "c",
+        "include.h": "c",
+        "bsp_include.h": "c",
+        "bsp_time.h": "c",
+        "main.h": "c",
+        "stm32f1xx_hal.h": "c",
+        "oled_iic.h": "c",
+        "adc.h": "c",
+        "winapifamily.h": "c",
+        "arm_math.h": "c"
+    },
+    "stm32-for-vscode.openOCDPath": "C:\\USERS\\OYONTALAS\\APPDATA\\ROAMING\\CODE\\USER\\GLOBALSTORAGE\\BMD.STM32-FOR-VSCODE\\@XPACK-DEV-TOOLS\\OPENOCD\\0.12.0-1.1\\.CONTENT\\BIN\\OPENOCD.EXE",
+    "stm32-for-vscode.makePath": "C:\\USERS\\OYONTALAS\\APPDATA\\ROAMING\\CODE\\USER\\GLOBALSTORAGE\\BMD.STM32-FOR-VSCODE\\@XPACK-DEV-TOOLS\\WINDOWS-BUILD-TOOLS\\4.4.0-1.1\\.CONTENT\\BIN\\MAKE.EXE",
+    "stm32-for-vscode.armToolchainPath": "c:\\Users\\Oyontalas\\AppData\\Roaming\\Code\\User\\globalStorage\\bmd.stm32-for-vscode\\@xpack-dev-tools\\arm-none-eabi-gcc\\12.2.1-1.2.1\\.content\\bin"
+}
