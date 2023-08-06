@@ -37,6 +37,11 @@
 #include "ad9833.h"
 
 #include "a_key.h"
+#include "pic.h"
+#include "lcd_init.h"
+#include "lcd.h"
+
+#include "syn6288.h"
 
 /* USER CODE END Includes */
 
@@ -76,7 +81,7 @@ uint8_t uart_rx_byte = 0;
 uint8_t uart_rx_buffer[UART_RX_MAX_SIZE] = {0};
 uint16_t uart_rx_buffer_size = 0;
 uint8_t uart_rx_over_flag = 0;
-uint8_t uart_rx_mode = 0;
+uint8_t uart_rx_mode = 3;
 
 // 定义发送缓冲区
 #define TX_BUFFER_SIZE 600
@@ -145,16 +150,27 @@ uint16_t tim8_arr = 0;
 // 定义两个基波的频率
 uint32_t freq_1 = 0;
 uint32_t freq_2 = 0;
+// 定义基波与谐波的频率比
+float32_t freq_1_rate = 0;
+float32_t freq_2_rate = 0;
 
 // 定义波的类型：1正弦波，2三角波
 uint8_t wave_1_type = 0;
 uint8_t wave_2_type = 0;
+// 定义计数上限
+#define WAVE_TYPE_COUNT_MAX 3
+// 定义波类型计数
+uint16_t wave_1_type_count = 0;
+uint16_t wave_2_type_count = 0;
 // 定义相位
 int16_t phase_1 = 0;
 int16_t phase_2 = 0;
 
 // 定义相位差
 float32_t phase_diff = 0.0;
+
+// 定义频率步进
+#define FREQ_STEP 5000
 
 void ADMIN_Init(void)
 {
@@ -178,11 +194,21 @@ void ADMIN_Init(void)
   HAL_Delay(10);
 
   AD9833_CS_Select = 0;
-  AD9833_SetFrequencyQuick(10000.0, AD9833_OUT_SINUS); // 写输出频率1000.0Hz,输出正弦波
+  AD9833_SetFrequencyQuick(0, AD9833_OUT_SINUS); // 写输出频率1000.0Hz,输出正弦波
   HAL_Delay(10);
   AD9833_CS_Select = 1;
-  AD9833_SetFrequencyQuick(10000.0, AD9833_OUT_SINUS); // 写输出频率1000.0Hz,输出正弦波
+  AD9833_SetFrequencyQuick(0, AD9833_OUT_SINUS); // 写输出频率1000.0Hz,输出正弦波
   HAL_Delay(10);
+
+  LCD_Init();
+  LCD_Fill(0, 0, 320, 240, BLACK);
+  // LCD_ShowChinese(240, 0, "就", RED, WHITE, 16, 0); // 显示汉字
+  // LCD_ShowChinese(240, 16, "是", RED, WHITE, 16, 0);
+  // LCD_ShowChinese(240, 32, "啊", RED, WHITE, 16, 0);
+
+  memset(tx_buffer, 0, strlen(tx_buffer));
+  snprintf(tx_buffer, 40, "            Welcome to Use            ", (uint16_t)phase_diff);
+  LCD_ShowString(8 * 0, 16 * 2, tx_buffer, WHITE, BLACK, 16, 0);
   // 初始化fft句柄
   arm_rfft_fast_init_f32(&fft_handler, FFT_SIZE);
 
@@ -225,7 +251,7 @@ void ADMIN_Mainloop(void)
       case 0:
 
         // LD1翻转
-        HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
+        // HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
         // htim8.Instance->ARR = 4 - 1;
         // phase_diff+=5.0;
         // if (phase_diff >180.0)
@@ -238,30 +264,42 @@ void ADMIN_Mainloop(void)
         //   adc_mode = 1;
         // }
         phase_diff -= 5.0;
+        if (phase_diff < -180.0)
+        {
+          phase_diff += 360.0;
+        }
+        memset(tx_buffer, 0, strlen(tx_buffer));
+        snprintf(tx_buffer, 24, "Phase Diff:%ddeg     ", (int16_t)phase_diff);
+        LCD_ShowString(0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
 
         break;
       case 1:
 
         // LD2翻转
-        HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
-        // 切换发送模式
-        system_mode--;
-        if (system_mode < 0)
-        {
-          system_mode = 4;
-        }
-        if (system_mode == 4)
-        {
-          // htim8.Instance->ARR = 4 - 1;
-          system_mode_full = 0;
-          adc_mode = 1;
-        }
+        // HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
+        // // 切换发送模式
+        // system_mode--;
+        // if (system_mode < 0)
+        // {
+        //   system_mode = 4;
+        // }
+        // if (system_mode == 4)
+        // {
+        //   // htim8.Instance->ARR = 4 - 1;
+        //   system_mode_full = 0;
+        //   adc_mode = 1;
+        // }
+        phase_diff = 0;
+
+        memset(tx_buffer, 0, strlen(tx_buffer));
+        snprintf(tx_buffer, 24, "Phase Diff:%ddeg     ", (int16_t)phase_diff);
+        LCD_ShowString(0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
 
         break;
       case 2:
 
         // LED3翻转
-        HAL_GPIO_TogglePin(LED3_GPIO_Port, LED3_Pin);
+        // HAL_GPIO_TogglePin(LED3_GPIO_Port, LED3_Pin);
         // htim8.Instance->ARR = 4 - 1;
         // phase_diff-=5.0;
         // if (phase_diff <-180.0)
@@ -269,23 +307,33 @@ void ADMIN_Mainloop(void)
         //   phase_diff += 360.0;
         // }
         phase_diff += 5.0;
+        if (phase_diff > 180.0)
+        {
+          phase_diff -= 360.0;
+        }
+        memset(tx_buffer, 0, strlen(tx_buffer));
+        snprintf(tx_buffer, 24, "Phase Diff:%ddeg     ", (int16_t)phase_diff);
+        LCD_ShowString(0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
 
         break;
       case 3:
-        // LD4翻转
-        HAL_GPIO_TogglePin(LED4_GPIO_Port, LED4_Pin);
-        // 切换发送模式
-        system_mode++;
-        if (system_mode > 4)
-        {
-          system_mode = 0;
-        }
-        if (system_mode == 4)
-        {
-          // htim8.Instance->ARR = 4 - 1;
-          system_mode_full = 0;
-          adc_mode = 1;
-        }
+        // // LD4翻转
+        // HAL_GPIO_TogglePin(LED4_GPIO_Port, LED4_Pin);
+        // // 切换发送模式
+        // system_mode++;
+        // if (system_mode > 4)
+        // {
+        //   system_mode = 0;
+        // }
+        // if (system_mode == 4)
+        // {
+        //   // htim8.Instance->ARR = 4 - 1;
+        //   system_mode_full = 0;
+        //   adc_mode = 1;
+        // }
+        system_mode_full = 0;
+        wave_1_type_count = 0;
+        wave_2_type_count = 0;
 
         break;
       }
@@ -496,303 +544,471 @@ void ADMIN_Mainloop(void)
     }
     else if (system_mode == 4)
     {
-
       // 定义本轮测量的基波频率
       uint32_t freq_1_this = 0;
       uint32_t freq_2_this = 0;
       // 计算两个基波的频率
       if (max_freq_1_1 < max_freq_1_2)
       {
-        freq_1_this = ((uint32_t)(max_freq_1_1) % 5000) > 2500 ? (uint32_t)(max_freq_1_1 / 5000 + 1) * 5000 : (uint32_t)(max_freq_1_1 / 5000) * 5000;
-        freq_2_this = ((uint32_t)(max_freq_1_2) % 5000) > 2500 ? (uint32_t)(max_freq_1_2 / 5000 + 1) * 5000 : (uint32_t)(max_freq_1_2 / 5000) * 5000;
+        freq_1_this = ((uint32_t)(max_freq_1_1) % FREQ_STEP) > FREQ_STEP / 2 ? (uint32_t)(max_freq_1_1 / FREQ_STEP + 1) * FREQ_STEP : (uint32_t)(max_freq_1_1 / FREQ_STEP) * FREQ_STEP;
+        freq_2_this = ((uint32_t)(max_freq_1_2) % FREQ_STEP) > FREQ_STEP / 2 ? (uint32_t)(max_freq_1_2 / FREQ_STEP + 1) * FREQ_STEP : (uint32_t)(max_freq_1_2 / FREQ_STEP) * FREQ_STEP;
       }
       else
       {
-        freq_1_this = ((uint32_t)(max_freq_1_2) % 5000) > 2500 ? (uint32_t)(max_freq_1_2 / 5000 + 1) * 5000 : (uint32_t)(max_freq_1_2 / 5000) * 5000;
-        freq_2_this = ((uint32_t)(max_freq_1_1) % 5000) > 2500 ? (uint32_t)(max_freq_1_1 / 5000 + 1) * 5000 : (uint32_t)(max_freq_1_1 / 5000) * 5000;
+        freq_1_this = ((uint32_t)(max_freq_1_2) % FREQ_STEP) > FREQ_STEP / 2 ? (uint32_t)(max_freq_1_2 / FREQ_STEP + 1) * FREQ_STEP : (uint32_t)(max_freq_1_2 / FREQ_STEP) * FREQ_STEP;
+        freq_2_this = ((uint32_t)(max_freq_1_1) % FREQ_STEP) > FREQ_STEP / 2 ? (uint32_t)(max_freq_1_1 / FREQ_STEP + 1) * FREQ_STEP : (uint32_t)(max_freq_1_1 / FREQ_STEP) * FREQ_STEP;
+      }
+      // 判断无信号
+      if (fft_output_magnitude_1[max_index_1_1] < 0.1)
+      {
+
+        if (freq_2 != 0 && freq_1 != 0)
+        {
+          system_mode_full = 0;
+          freq_1 = 0;
+          freq_2 = 0;
+          // 设置频率
+          AD9833_CS_Select = 0;
+          AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_SINUS);
+          AD9833_CS_Select = 1;
+          AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
+
+          // 屏幕显示
+          memset(tx_buffer, 0, strlen(tx_buffer));
+          snprintf(tx_buffer, 40, "                                       ");
+          LCD_ShowString(0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
+          LCD_ShowString(0, 16 * 1, tx_buffer, WHITE, BLACK, 16, 0);
+          LCD_ShowString(0, 16 * 2, tx_buffer, WHITE, BLACK, 16, 0);
+          LCD_ShowString(0, 16 * 3, tx_buffer, WHITE, BLACK, 16, 0);
+
+          memset(tx_buffer, 0, strlen(tx_buffer));
+          // 显示无信号
+          snprintf(tx_buffer, 24, "NO SIGNAL", freq_1 / 1000);
+          LCD_ShowString(8 * 15, 16 * 2, tx_buffer, WHITE, BLACK, 16, 0);
+
+          memset(tx_buffer, 0, strlen(tx_buffer));
+          snprintf(tx_buffer, 100, "无信号", freq_1 / 1000, freq_2 / 1000);
+          SYN_FrameInfo(0, tx_buffer);
+        }
       }
 
-      // 检查是否有频率变化
-      if (freq_1_this != freq_1 || freq_2_this != freq_2)
+      else if (system_mode_full < WAVE_TYPE_COUNT_MAX)
       {
-        freq_1 = freq_1_this;
-        freq_2 = freq_2_this;
-        // 判断波形
 
-        // 如果freq_1不是freq_2的3倍，
-        // 即不是freq_1==20000&&freq_2==60000
-        // 不是freq_1==25000&&freq_2==75000
-        // 不是freq_1==30000&&freq_2==90000
-        // 即可用谐波方式判断
-        if (!((freq_1 == 20000 && freq_2 == 60000) || (freq_1 == 25000 && freq_2 == 75000) || (freq_1 == 30000 && freq_2 == 90000)))
+        if (freq_1_this != freq_1 || freq_2_this != freq_2)
         {
-          uint16_t max_index_1_1_harmonic = 0;
-          uint16_t max_index_1_2_harmonic = 0;
+          system_mode_full = 0;
 
-          // 定义谐波位置最大值的索引，搜索范围为谐波的正负2.5k以内
-          max_index_1_1_harmonic = max_index_1_1 * 3 - (uint32_t)(2500.0 / freq_resolution);
-          for (uint16_t i = max_index_1_1 * 3 - (uint32_t)(2500.0 / freq_resolution); i < max_index_1_1 * 3 + (uint32_t)(2500.0 / freq_resolution); i++)
-          {
-            if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_1_harmonic])
-            {
-              max_index_1_1_harmonic = i;
-            }
-          }
-          max_index_1_2_harmonic = max_index_1_2 * 3 - (uint32_t)(2500.0 / freq_resolution);
-          for (uint16_t i = max_index_1_2 * 3 - (uint32_t)(2500.0 / freq_resolution); i < max_index_1_2 * 3 + (uint32_t)(2500.0 / freq_resolution); i++)
-          {
-            if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_2_harmonic])
-            {
-              max_index_1_2_harmonic = i;
-            }
-          }
-          if (fft_output_magnitude_1[max_index_1_1_harmonic] > 0.04 * fft_output_magnitude_1[max_index_1_1])
-          {
-            if (max_freq_1_1 < max_freq_1_2)
-            {
-
-              wave_1_type = 2;
-              AD9833_CS_Select = 0;
-              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
-            }
-            else
-            {
-              wave_2_type = 2;
-              AD9833_CS_Select = 1;
-              AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
-            }
-          }
-          else
-          {
-            if (max_freq_1_1 < max_freq_1_2)
-            {
-
-              wave_1_type = 1;
-              AD9833_CS_Select = 0;
-              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_SINUS);
-            }
-            else
-            {
-              wave_2_type = 1;
-              AD9833_CS_Select = 1;
-              AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
-            }
-          }
-
-          if (fft_output_magnitude_1[max_index_1_2_harmonic] > 0.04 * fft_output_magnitude_1[max_index_1_2])
-          {
-            if (max_freq_1_1 < max_freq_1_2)
-            {
-              wave_2_type = 2;
-              AD9833_CS_Select = 1;
-              AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
-            }
-            else
-            {
-              wave_1_type = 2;
-              AD9833_CS_Select = 0;
-              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
-            }
-          }
-          else
-          {
-            if (max_freq_1_1 < max_freq_1_2)
-            {
-              wave_2_type = 1;
-              AD9833_CS_Select = 1;
-              AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
-            }
-            else
-            {
-              wave_1_type = 2;
-              AD9833_CS_Select = 0;
-              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
-            }
-          }
+          freq_1 = freq_1_this;
+          freq_2 = freq_2_this;
         }
         else
         {
-          uint16_t max_index_1_1_harmonic = 0;
-          uint16_t max_index_1_2_harmonic = 0;
 
-          // 定义谐波位置最大值的索引，搜索范围为谐波的正负2.5k以内
-          max_index_1_1_harmonic = max_index_1_1 * 5 - (uint32_t)(2500.0 / freq_resolution);
-          for (uint16_t i = max_index_1_1 * 5 - (uint32_t)(2500.0 / freq_resolution); i < max_index_1_1 * 5 + (uint32_t)(2500.0 / freq_resolution); i++)
-          {
-            if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_1_harmonic])
-            {
-              max_index_1_1_harmonic = i;
-            }
-          }
-          max_index_1_2_harmonic = max_index_1_2 * 5 - (uint32_t)(2500.0 / freq_resolution);
-          for (uint16_t i = max_index_1_2 * 5 - (uint32_t)(2500.0 / freq_resolution); i < max_index_1_2 * 5 + (uint32_t)(2500.0 / freq_resolution); i++)
-          {
-            if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_2_harmonic])
-            {
-              max_index_1_2_harmonic = i;
-            }
-          }
-          if (fft_output_magnitude_1[max_index_1_1_harmonic] > 0.01 * fft_output_magnitude_1[max_index_1_1])
-          {
-            if (max_freq_1_1 < max_freq_1_2)
-            {
+          // 判断波形
 
-              wave_1_type = 2;
-              AD9833_CS_Select = 0;
-              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+          // 如果freq_2不是freq_1的3倍，
+          // 即不是freq_1==20000&&freq_2==60000
+          // 不是freq_1==25000&&freq_2==75000
+          // 不是freq_1==30000&&freq_2==90000
+          // 即可用谐波方式判断
+          if (freq_1 * 3 != freq_2)
+          {
+            uint16_t max_index_1_1_harmonic = 0;
+            uint16_t max_index_1_2_harmonic = 0;
+
+            // 定义谐波位置最大值的索引，搜索范围为谐波的正负2.5k以内
+            max_index_1_1_harmonic = max_index_1_1 * 3 - (uint32_t)(FREQ_STEP / freq_resolution / 2);
+            for (uint16_t i = max_index_1_1 * 3 - (uint32_t)(FREQ_STEP / freq_resolution / 2); i < max_index_1_1 * 3 + (uint32_t)(FREQ_STEP / freq_resolution / 2); i++)
+            {
+              if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_1_harmonic])
+              {
+                max_index_1_1_harmonic = i;
+              }
+            }
+            max_index_1_2_harmonic = max_index_1_2 * 3 - (uint32_t)(FREQ_STEP / freq_resolution / 2);
+            for (uint16_t i = max_index_1_2 * 3 - (uint32_t)(FREQ_STEP / freq_resolution / 2); i < max_index_1_2 * 3 + (uint32_t)(FREQ_STEP / freq_resolution / 2); i++)
+            {
+              if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_2_harmonic])
+              {
+                max_index_1_2_harmonic = i;
+              }
+            }
+            // // 清空发送缓冲区
+            // memset(tx_buffer, 0, strlen(tx_buffer));
+            // snprintf(tx_buffer, TX_BUFFER_SIZE, "finished!\r\n\
+            // max_index_1_1:%d\tmax_index_1_1_harmonic:%d\tmax_1:%f\tmax_1_harmonic:%f\t,rate:%f\r\n\
+            // max_index_1_2:%d\tmax_index_1_2_harmonic:%d\tmax_2:%f\tmax_2_harmonic:%f\t,rate:%f\r\n\
+            // ",
+            //          max_index_1_1, max_index_1_1_harmonic, fft_output_magnitude_1[max_index_1_1], fft_output_magnitude_1[max_index_1_1_harmonic], fft_output_magnitude_1[max_index_1_1_harmonic] / fft_output_magnitude_1[max_index_1_1],
+            //          max_index_1_2, max_index_1_2_harmonic, fft_output_magnitude_1[max_index_1_2], fft_output_magnitude_1[max_index_1_2_harmonic], fft_output_magnitude_1[max_index_1_2_harmonic] / fft_output_magnitude_1[max_index_1_2]);
+            // HAL_UART_Transmit(&huart1, (uint8_t *)tx_buffer, strlen(tx_buffer), 0xffff);
+            if (fft_output_magnitude_1[max_index_1_1_harmonic] > 0.02 * (fft_output_magnitude_1[max_index_1_1]))
+            {
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+
+                wave_1_type_count++;
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              }
+              else
+              {
+                wave_2_type_count++;
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
+              }
             }
             else
             {
-              wave_2_type = 2;
-              AD9833_CS_Select = 1;
-              AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_SINUS);
+              }
+              else
+              {
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
+              }
+            }
+
+            if (fft_output_magnitude_1[max_index_1_2_harmonic] > 0.02 * (fft_output_magnitude_1[max_index_1_2]))
+            {
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+                wave_2_type_count++;
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
+              }
+              else
+              {
+                wave_1_type_count++;
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              }
+            }
+            else
+            {
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
+              }
+              else
+              {
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              }
             }
           }
           else
           {
-            if (max_freq_1_1 < max_freq_1_2)
-            {
+            uint16_t max_index_1_1_harmonic = 0;
+            uint16_t max_index_1_2_harmonic = 0;
 
-              wave_1_type = 1;
-              AD9833_CS_Select = 0;
+            // 定义谐波位置最大值的索引，搜索范围为谐波的正负2.5k以内
+            max_index_1_1_harmonic = max_index_1_1 * 5 - (uint32_t)(FREQ_STEP / freq_resolution / 2);
+            for (uint16_t i = max_index_1_1 * 5 - (uint32_t)(FREQ_STEP / freq_resolution / 2); i < max_index_1_1 * 5 + (uint32_t)(FREQ_STEP / freq_resolution / 2); i++)
+            {
+              if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_1_harmonic])
+              {
+                max_index_1_1_harmonic = i;
+              }
+            }
+            max_index_1_2_harmonic = max_index_1_2 * 5 - (uint32_t)(FREQ_STEP / freq_resolution / 2);
+            for (uint16_t i = max_index_1_2 * 5 - (uint32_t)(FREQ_STEP / freq_resolution / 2); i < max_index_1_2 * 5 + (uint32_t)(FREQ_STEP / freq_resolution / 2); i++)
+            {
+              if (fft_output_magnitude_1[i] > fft_output_magnitude_1[max_index_1_2_harmonic])
+              {
+                max_index_1_2_harmonic = i;
+              }
+            }
+            // // 清空发送缓冲区
+            // memset(tx_buffer, 0, strlen(tx_buffer));
+            // snprintf(tx_buffer, TX_BUFFER_SIZE, "finished!\r\n\
+            // max_index_1_1:%d\tmax_index_1_1_harmonic:%d\tmax_1:%f\tmax_1_harmonic:%f\t,rate:%f\r\n\
+            // max_index_1_2:%d\tmax_index_1_2_harmonic:%d\tmax_2:%f\tmax_2_harmonic:%f\t,rate:%f\r\n\
+            // ",
+            //          max_index_1_1, max_index_1_1_harmonic, fft_output_magnitude_1[max_index_1_1], fft_output_magnitude_1[max_index_1_1_harmonic], fft_output_magnitude_1[max_index_1_1_harmonic] / fft_output_magnitude_1[max_index_1_1],
+            //          max_index_1_2, max_index_1_2_harmonic, fft_output_magnitude_1[max_index_1_2], fft_output_magnitude_1[max_index_1_2_harmonic], fft_output_magnitude_1[max_index_1_2_harmonic] / fft_output_magnitude_1[max_index_1_2]);
+            // HAL_UART_Transmit(&huart1, (uint8_t *)tx_buffer, strlen(tx_buffer), 0xffff);
+
+            if (fft_output_magnitude_1[max_index_1_1_harmonic] > 0.01 * fft_output_magnitude_1[max_index_1_1])
+            {
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+
+                wave_1_type_count++;
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              }
+              else
+              {
+                wave_2_type_count++;
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
+              }
+            }
+            else
+            {
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_SINUS);
+              }
+              else
+              {
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
+              }
+            }
+
+            if (fft_output_magnitude_1[max_index_1_2_harmonic] > 0.01 * fft_output_magnitude_1[max_index_1_2])
+            {
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+                wave_2_type_count++;
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
+              }
+              else
+              {
+                wave_1_type_count++;
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              }
+            }
+            else
+            {
+              if (max_freq_1_1 < max_freq_1_2)
+              {
+
+                // AD9833_CS_Select = 1;
+                // AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
+              }
+              else
+              {
+                // AD9833_CS_Select = 0;
+                // AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              }
+            }
+          }
+          system_mode_full++;
+          if (system_mode_full == WAVE_TYPE_COUNT_MAX)
+          {
+            AD9833_CS_Select = 0;
+            if (wave_1_type_count < WAVE_TYPE_COUNT_MAX - wave_1_type_count)
+            {
+              wave_1_type = 0;
               AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_SINUS);
             }
             else
             {
-              wave_2_type = 1;
-              AD9833_CS_Select = 1;
+              wave_1_type = 1;
+              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+            }
+            AD9833_CS_Select = 1;
+            if (wave_2_type_count < WAVE_TYPE_COUNT_MAX - wave_2_type_count)
+            {
+              wave_2_type = 0;
               AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
             }
-          }
-
-          if (fft_output_magnitude_1[max_index_1_2_harmonic] > 0.01 * fft_output_magnitude_1[max_index_1_2])
-          {
-            if (max_freq_1_1 < max_freq_1_2)
+            else
             {
-              wave_2_type = 2;
-              AD9833_CS_Select = 1;
+              wave_2_type = 1;
               AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_TRIANGLE);
             }
-            else
+            // 清空发送缓冲区
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            snprintf(tx_buffer, TX_BUFFER_SIZE, "finished!\r\n\
+WAVE_TYPE_COUNT_MAX:%d\n\
+freq_1:%d\twave_1_type:%d\twave_1_type_count:%d\n\
+freq_2:%d\twave_2_type:%d\twave_2_type_count:%d\n\
+            ",
+                     WAVE_TYPE_COUNT_MAX,
+                     freq_1, wave_1_type, wave_1_type_count,
+                     freq_2, wave_2_type, wave_2_type_count);
+
+            HAL_UART_Transmit(&huart1, tx_buffer, strlen(tx_buffer), 0xffff);
+
+            // 屏幕显示
+                // 将adc_buffer_1中的数据复制到fft_input中
+              for (uint16_t i = 0; i < FFT_SIZE; i++)
+              {
+                fft_input[i] = (float32_t)adc_buffer_1[i] * 3.3 / 4096;
+              }
+
+            // Gui_ShowWave(float *InputWaveData, uint16_t c_len, float begin_x, float begin_y, float end_x, float end_y);
+            Gui_ShowWave(fft_input+100, 100, 0.1, 0.3, 0.85, 0.95);
+
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            snprintf(tx_buffer, 40, "             Mixed-signal             ");
+            LCD_ShowString(8 * 0, 16 * 3, tx_buffer, WHITE, BLACK, 16, 0);
+
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            snprintf(tx_buffer, 40, "  0us     25us    50us    75us   100us");
+            LCD_ShowString(8 * 0, 16 * 14, tx_buffer, WHITE, BLACK, 16, 0);
+
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            snprintf(tx_buffer, 40, "Phase Diff:%ddeg     ", (uint16_t)phase_diff);
+            LCD_ShowString(8 * 0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            snprintf(tx_buffer, 40, "Freq_A:%dkHz            ", freq_1 / 1000);
+            LCD_ShowString(8 * 0, 16 * 1, tx_buffer, WHITE, BLACK, 16, 0);
+
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            if (wave_1_type == 0)
             {
-              wave_1_type = 2;
-              AD9833_CS_Select = 0;
-              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              snprintf(tx_buffer, 20, "wave_A:sin     ");
             }
-          }
-          else
-          {
-            if (max_freq_1_1 < max_freq_1_2)
+            else if (wave_1_type == 1)
             {
-              wave_2_type = 1;
-              AD9833_CS_Select = 1;
-              AD9833_SetFrequencyQuick((float)freq_2, AD9833_OUT_SINUS);
+              snprintf(tx_buffer, 20, "wave_A:tri     ");
             }
-            else
+            LCD_ShowString(8 * 20, 16 * 1, tx_buffer, WHITE, BLACK, 16, 0);
+
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            snprintf(tx_buffer, 40, "freq_B:%dkHz              ", freq_2 / 1000);
+            LCD_ShowString(8 * 0, 16 * 2, tx_buffer, WHITE, BLACK, 16, 0);
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            if (wave_2_type == 0)
             {
-              wave_1_type = 2;
-              AD9833_CS_Select = 0;
-              AD9833_SetFrequencyQuick((float)freq_1, AD9833_OUT_TRIANGLE);
+              snprintf(tx_buffer, 20, "wave_B:sin   ");
             }
+            else if (wave_2_type == 1)
+            {
+              snprintf(tx_buffer, 20, "wave_B:tri   ");
+            }
+            LCD_ShowString(8 * 20, 16 * 2, tx_buffer, WHITE, BLACK, 16, 0);
+
+            memset(tx_buffer, 0, strlen(tx_buffer));
+            if (wave_1_type == 0 && wave_2_type == 0)
+            {
+              snprintf(tx_buffer, 100, "A频率为%dK赫兹 正弦波 B频率为%dK赫兹 正弦波 ", freq_1 / 1000, freq_2 / 1000);
+            }
+            else if (wave_1_type == 0 && wave_2_type == 1)
+            {
+              snprintf(tx_buffer, 100, "A频率为%dK赫兹 正弦波 B频率为%dK赫兹 三角波 ", freq_1 / 1000, freq_2 / 1000);
+            }
+            else if (wave_1_type == 1 && wave_2_type == 0)
+            {
+              snprintf(tx_buffer, 100, "A频率为%dK赫兹 三角波 B频率为%dK赫兹 正弦波 ", freq_1 / 1000, freq_2 / 1000);
+            }
+            else if (wave_1_type == 1 && wave_2_type == 1)
+            {
+              snprintf(tx_buffer, 100, "A频率为%dK赫兹 三角波 B频率为%dK赫兹 三角波 ", freq_1 / 1000, freq_2 / 1000);
+            }
+
+            SYN_FrameInfo(0, tx_buffer);
+
+
+            // HAL_Delay(5000);
           }
         }
-
-        // 清空发送缓冲区
-        memset(tx_buffer, 0, strlen(tx_buffer));
-        snprintf(tx_buffer, TX_BUFFER_SIZE, "finished!\r\nfreq_1:%d\tfreq_2:%d,wave_1_type:%d,wave_2_type:%d\r\n",
-                 freq_1, freq_2, wave_1_type, wave_2_type);
-
-        HAL_UART_Transmit(&huart1, tx_buffer, strlen(tx_buffer), 0xffff);
       }
       else
       {
 
-        // 获取最大值的索引
-        uint16_t max_index_2 = 1;
-        // 过滤直流分量
-        for (uint16_t i = 1; i < FFT_SIZE; i++)
+        // 检查是否有频率变化
+        if (freq_1_this != freq_1 || freq_2_this != freq_2)
         {
-          if (fft_output_magnitude_2[i] >= fft_output_magnitude_2[max_index_2])
-          {
-            max_index_2 = i;
-          }
+          system_mode_full = 0;
+          wave_1_type_count = 0;
+          wave_2_type_count = 0;
         }
-        // 得到最大值的频率，采样率是定时15的频率
-        float32_t max_freq_2 = (float32_t)(1.0 * max_index_2 * 160 * 1000 * 1000 / (htim8.Instance->PSC + 1) / (htim8.Instance->ARR + 1)) / FFT_SIZE;
-        // 得到最大值的频率对应的相位
-        float32_t max_phase_2 = atan2f(fft_output_2[max_index_2 * 2 + 1], fft_output_2[max_index_2 * 2]);
-        // 弧度转换成角度
-        max_phase_2 = max_phase_2 * 180 / 3.1415926;
-
-        float32_t diff = 0.0;
-        if (adc_mode == 1)
-        {
-          if (max_freq_1_1 < max_freq_1_2)
-          {
-            diff = max_phase_1_1 - max_phase_2 + 1.351 / 10000 * max_freq_1_1;
-          }
-          else
-          {
-            diff = max_phase_1_2 - max_phase_2 + 1.351 / 10000 * max_freq_1_2;
-          }
-        }
-        else if (adc_mode == 2)
-        {
-          if (max_freq_1_1 < max_freq_1_2)
-          {
-            diff = max_phase_1_2 - max_phase_2 + 1.351 / 10000 * max_freq_1_2 - phase_diff * freq_1 / freq_2;
-          }
-          else
-          {
-            diff = max_phase_1_1 - max_phase_2 + 1.351 / 10000 * max_freq_1_1 - phase_diff * freq_1 / freq_2;
-          }
-        }
-        if (diff > 180)
-        {
-          diff -= 360;
-        }
-        else if (diff < -180)
-        {
-          diff += 360;
-        }
-        // 根绝adc模式进行锁相
-        if (adc_mode == 1)
+        else
         {
 
-          phase_1 += (int16_t)(diff / 360 * 4096);
-          if (phase_1 > 4096)
+          // 获取最大值的索引
+          uint16_t max_index_2 = 1;
+          // 过滤直流分量
+          for (uint16_t i = 1; i < FFT_SIZE; i++)
           {
-            phase_1 -= 4096;
+            if (fft_output_magnitude_2[i] >= fft_output_magnitude_2[max_index_2])
+            {
+              max_index_2 = i;
+            }
           }
-          else if (phase_1 < 0)
-          {
-            phase_1 += 4096;
-          }
-          AD9833_CS_Select = 0;
-          // 设置相位差进行跟随
-          AD9833_SetPhase(AD9833_REG_PHASE0, (uint16_t)phase_1);
-          // HAL_Delay(1);
+          // 得到最大值的频率，采样率是定时15的频率
+          float32_t max_freq_2 = (float32_t)(1.0 * max_index_2 * 160 * 1000 * 1000 / (htim8.Instance->PSC + 1) / (htim8.Instance->ARR + 1)) / FFT_SIZE;
+          // 得到最大值的频率对应的相位
+          float32_t max_phase_2 = atan2f(fft_output_2[max_index_2 * 2 + 1], fft_output_2[max_index_2 * 2]);
+          // 弧度转换成角度
+          max_phase_2 = max_phase_2 * 180 / 3.1415926;
 
-          adc_mode = 2;
-        }
-        else if (adc_mode == 2)
-        {
-
-          phase_2 += (int16_t)(diff / 360 * 4096);
-          if (phase_2 > 4096)
+          float32_t diff = 0.0;
+          if (adc_mode == 1)
           {
-            phase_2 -= 4096;
+            if (max_freq_1_1 < max_freq_1_2)
+            {
+              diff = max_phase_1_1 - max_phase_2 + 1.351 / 10000 * max_freq_1_1;
+            }
+            else
+            {
+              diff = max_phase_1_2 - max_phase_2 + 1.351 / 10000 * max_freq_1_2;
+            }
           }
-          else if (phase_2 < 0)
+          else if (adc_mode == 2)
           {
-            phase_2 += 4096;
+            if (max_freq_1_1 < max_freq_1_2)
+            {
+              diff = max_phase_1_2 - max_phase_2 + 1.351 / 10000 * max_freq_1_2 - phase_diff;
+            }
+            else
+            {
+              diff = max_phase_1_1 - max_phase_2 + 1.351 / 10000 * max_freq_1_1 - phase_diff;
+            }
           }
+          if (diff > 180)
+          {
+            diff -= 360;
+          }
+          else if (diff < -180)
+          {
+            diff += 360;
+          }
+          // 根绝adc模式进行锁相
+          if (adc_mode == 1)
+          {
 
-          AD9833_CS_Select = 1;
-          // 设置相位差进行跟随
-          AD9833_SetPhase(AD9833_REG_PHASE0, (uint16_t)phase_2);
-          // HAL_Delay(1);
-          adc_mode = 1;
+            phase_1 += (int16_t)(diff / 360 * 4096);
+            if (phase_1 > 4096)
+            {
+              phase_1 -= 4096;
+            }
+            else if (phase_1 < 0)
+            {
+              phase_1 += 4096;
+            }
+            AD9833_CS_Select = 0;
+            // 设置相位差进行跟随
+            AD9833_SetPhase(AD9833_REG_PHASE0, (uint16_t)phase_1);
+            // HAL_Delay(1);
+
+            adc_mode = 2;
+          }
+          else if (adc_mode == 2)
+          {
+
+            phase_2 += (int16_t)(diff / 360 * 4096);
+            if (phase_2 > 4096)
+            {
+              phase_2 -= 4096;
+            }
+            else if (phase_2 < 0)
+            {
+              phase_2 += 4096;
+            }
+
+            AD9833_CS_Select = 1;
+            // 设置相位差进行跟随
+            AD9833_SetPhase(AD9833_REG_PHASE0, (uint16_t)phase_2);
+            // HAL_Delay(1);
+            adc_mode = 1;
+          }
         }
       }
 #if 0
@@ -1313,6 +1529,44 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
           uart_rx_over_flag = 1;
         }
         break;
+      case 3:
+        if (uart_rx_byte == '1')
+        {
+          phase_diff += 1;
+          if (phase_diff > 180)
+          {
+            phase_diff -= 360;
+          }
+          memset(tx_buffer, 0, strlen(tx_buffer));
+          snprintf(tx_buffer, 24, "Phase Diff:%ddeg     ", (int16_t)phase_diff);
+          LCD_ShowString(0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
+        }
+        else if (uart_rx_byte == '2')
+        {
+          phase_diff -= 1;
+          if (phase_diff < -180)
+          {
+            phase_diff += 360;
+          }
+          memset(tx_buffer, 0, strlen(tx_buffer));
+          snprintf(tx_buffer, 24, "Phase Diff:%ddeg     ", (int16_t)phase_diff);
+          LCD_ShowString(0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
+        }
+        else if (uart_rx_byte == '3')
+        {
+          phase_diff = 0;
+          memset(tx_buffer, 0, strlen(tx_buffer));
+          snprintf(tx_buffer, 24, "Phase Diff:%ddeg     ", (int16_t)phase_diff);
+          LCD_ShowString(0, 16 * 0, tx_buffer, WHITE, BLACK, 16, 0);
+        }
+        else if (uart_rx_byte == '4')
+        {
+          system_mode_full = 0;
+          wave_1_type_count = 0;
+          wave_2_type_count = 0;
+        }
+
+        break;
       }
     }
     else
@@ -1377,6 +1631,8 @@ int main(void)
   MX_USART1_UART_Init();
   MX_ADC2_Init();
   MX_SPI2_Init();
+  MX_SPI3_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */

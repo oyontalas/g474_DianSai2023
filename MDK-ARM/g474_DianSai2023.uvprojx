@@ -730,6 +730,21 @@
               <FileType>1</FileType>
               <FilePath>..\admin\ad9833.c</FilePath>
             </File>
+            <File>
+              <FileName>lcd.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\admin\lcd.c</FilePath>
+            </File>
+            <File>
+              <FileName>lcd_init.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\admin\lcd_init.c</FilePath>
+            </File>
+            <File>
+              <FileName>syn6288.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\admin\syn6288.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
