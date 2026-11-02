@@ -97,7 +97,7 @@ DMA 完成一帧采样
 
 ### 1. 利用题目的频率步进，稳定确定两路基波
 
-源码入口：[采样与 FFT](Core/Src/main.c#L404) · [峰值搜索](Core/Src/main.c#L464) · [频率归整](Core/Src/main.c#L545)
+源码入口：[采样与 FFT](Core/Src/main.c#L408) · [峰值搜索](Core/Src/main.c#L471) · [频率归整](Core/Src/main.c#L552)
 
 STM32G474 运行于 **160 MHz**。TIM8 以 **1 MHz** 的配置触发率驱动 ADC 双通道顺序采样，DMA 每帧收集 4096 个交错数据，拆分后每通道各有 **2048 点**。CMSIS-DSP 完成实数 FFT，对应频率间隔约为：
 
@@ -115,7 +115,7 @@ $$
 
 ### 2. 用谐波识别三角波，处理三倍频重叠
 
-源码入口：[三次谐波判别](Core/Src/main.c#L615) · [五次谐波判别](Core/Src/main.c#L707) · [三轮投票](Core/Src/main.c#L799)
+源码入口：[三次谐波判别](Core/Src/main.c#L622) · [五次谐波判别](Core/Src/main.c#L717) · [三轮投票](Core/Src/main.c#L811)
 
 正弦波主要包含基波；理想三角波包含奇次谐波，其幅度相对基波按阶数平方衰减：
 
@@ -136,7 +136,7 @@ $$
 
 ### 3. 双 DDS 分别重建两路波形
 
-源码入口：[频率控制字](admin/ad9833.c#L176) · [波形配置](Core/Src/main.c#L800)
+源码入口：[频率控制字](admin/ad9833.c#L178) · [波形配置](Core/Src/main.c#L812)
 
 两片 AD9833 共用 SPI 总线，通过独立片选分别接收配置。程序将低频成分分配给 A′，高频成分分配给 B′，并选择相应的正弦波或三角波输出模式。
 
@@ -150,7 +150,7 @@ DDS 承担连续波形生成，MCU 则保留算力用于 FFT、识别和相位�
 
 ### 4. 从“标称频率一致”到“稳定同频显示”
 
-源码入口：[反馈相位提取](Core/Src/main.c#L926) · [相位误差与修正](Core/Src/main.c#L942) · [相位寄存器写入](admin/ad9833.c#L196)
+源码入口：[反馈相位提取](Core/Src/main.c#L939) · [相位误差与修正](Core/Src/main.c#L958) · [相位寄存器写入](admin/ad9833.c#L201)
 
 题目用原信号 A 触发示波器，要求 A′在显示 4～8 个周期时不漂移。只给 DDS 写入相同的标称频率，不能消除独立时钟和模拟链路带来的相位变化，因此程序还引入了输出反馈。
 
@@ -162,8 +162,10 @@ DDS 承担连续波形生成，MCU 则保留算力用于 FFT、识别和相位�
 频谱相位通过 `atan2(Im, Re)` 得到。相位误差折回到约 ±180°，再换算为 DDS 的 12 位相位增量：
 
 $$
-\Delta P = \operatorname{trunc}\!\left(\frac{e_\varphi}{360^\circ}\,4096\right)
+\Delta P = \mathrm{trunc}\left(\frac{e_\varphi}{360^\circ}\,4096\right)
 $$
+
+其中 `trunc` 表示向零截断，与代码中的整数类型转换一致。
 
 程序将该增量累加到相位寄存器中，并反复交替校正两路。代码还包含随频率变化的补偿项 `1.351 / 10000 × f`（f 以 Hz 计，补偿结果为度），用于补偿链路相位偏差；更换采样条件或模拟电路后需重新标定。
 
@@ -207,8 +209,8 @@ g474_DianSai2023/
 
 ### 推荐阅读路线
 
-1. **启动与调度**：[main()](Core/Src/main.c#L1603) → [ADMIN_Init()](Core/Src/main.c#L175) → [ADMIN_Mainloop()](Core/Src/main.c#L231)，了解初始化顺序与控制循环。
-2. **采样链路**：[ADC 配置](Core/Src/adc.c) → [定时器触发](Core/Src/tim.c) → [DMA 完成中断](Core/Src/stm32g4xx_it.c#L67)，理解一帧数据何时开始、何时交给算法。
+1. **启动与调度**：[main()](Core/Src/main.c#L1622) → [ADMIN_Init()](Core/Src/main.c#L178) → [ADMIN_Mainloop()](Core/Src/main.c#L235)，了解初始化顺序与控制循环。
+2. **采样链路**：[ADC 配置](Core/Src/adc.c) → [定时器触发](Core/Src/tim.c) → [DMA 完成中断](Core/Src/stm32g4xx_it.c#L68)，理解一帧数据何时开始、何时交给算法。
 3. **算法核心**：沿上一节四个算法的源码入口，阅读寻峰、归整、谐波判别与相位修正。
 4. **输出与交互**：[AD9833 驱动](admin/ad9833.c)、[LCD 绘制](admin/lcd.c)、[按键扫描](admin/a_key.c)、[语音播报](admin/syn6288.c)。
 

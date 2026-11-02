@@ -63,7 +63,8 @@ extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
 
 
-// 自定义adc1中断函数
+// ADC1 一帧对应混合信号 C 与 A 输出反馈。DMA 虽配置为循环模式，
+// 帧完成后仍主动停止，供主循环做 FFT；计算与显示不放在本中断中执行。
 void ADMIN_ADC1_IRQHandler(void)
 {
   // 判断转换完成标志位DMA_FLAG_TCIFx
@@ -78,7 +79,8 @@ void ADMIN_ADC1_IRQHandler(void)
   }
 }
 
-// 自定义adc2中断函数
+// ADC2 一帧对应混合信号 C 与 B 输出反馈。与 ADC1 共用缓冲区及完成标志，
+// 主循环按 adc_mode 交替启动，不能据此理解为两组 ADC 可同时写入同一缓冲区。
 void ADMIN_ADC2_IRQHandler(void)
 {
   // 判断转换完成标志位DMA_FLAG_TCIFx

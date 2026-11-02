@@ -9,7 +9,8 @@
 
 #define RealFreDat 268435456.0 / FCLK // 总的公式为 Fout=（Fclk/2的28次方）*28位寄存器的值
 
-// 定义片选选择变量
+// 两片 DDS 共用 SPI2；0 选 PB11 对应低频 A，1 选 PB12 对应高频 B。
+// 调用频率/相位接口前先选芯片；这与芯片内部 FREQ0/FREQ1 寄存器编号不同。
 uint8_t AD9833_CS_Select = 0;
 
 /*
@@ -161,6 +162,7 @@ void AD9833_SetRegisterValue(unsigned short regValue)
 *******************************************************************************************/
 void AD9833_SetFrequencyQuick(float fout, unsigned short type)
 {
+	// 本工程两路输出分别使用两片芯片的 FREQ0，不是同一芯片的两个频率寄存器。
 	AD9833_SetFrequency(AD9833_REG_FREQ0, fout, type);
 }
 
@@ -177,9 +179,12 @@ void AD9833_SetFrequency(unsigned short reg, float fout, unsigned short type)
 {
 	unsigned short freqHi = reg;
 	unsigned short freqLo = reg;
+	// fout 单位为 Hz：28 位调谐字 = fout * 2^28 / FCLK，转整数时截去小数。
+	// FCLK 应与 DDS 实际参考时钟一致，否则归整后的题目频率仍会产生输出偏差。
 	unsigned long val = RealFreDat * fout;
 	freqHi |= (val & 0xFFFC000) >> 14;
 	freqLo |= (val & 0x3FFF);
+	// B28 允许完整写入 28 位频率字，依次发送低 14 位和高 14 位；type 选择波形。
 	AD9833_SetRegisterValue(AD9833_B28 | type);
 	AD9833_SetRegisterValue(freqLo);
 	AD9833_SetRegisterValue(freqHi);
@@ -195,6 +200,8 @@ void AD9833_SetFrequency(unsigned short reg, float fout, unsigned short type)
 *******************************************************************************************/
 void AD9833_SetPhase(unsigned short reg, unsigned short val)
 {
+	// val 是 12 位相位码（0..4095），不是角度；一周为 4096 码，回绕由调用者负责。
+	// 题目反馈使用 PHASE0，只写相位寄存器，频率与波形配置保持原值。
 	unsigned short phase = reg;
 	phase |= val;
 	AD9833_SetRegisterValue(phase);

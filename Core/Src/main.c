@@ -110,16 +110,18 @@ uint8_t tx_buffer[TX_BUFFER_SIZE] = {0};
 // // fft幅值输出缓冲区
 // float32_t fft_output_magnitude[FFT_SIZE] = {0};
 
-// 定义adc采样缓冲区
+// 每帧是同一 ADC 的两个顺序通道交错采样，共 4096 个值，每通道 2048 点。
+// 题目分离时第一通道接混合信号 C，第二通道接当前 DDS 输出反馈。
 #define ADC_BUFFER_SIZE 4096
 
 uint16_t adc_buffer[ADC_BUFFER_SIZE] = {0};
 uint8_t adc_buffer_full_flag = 0;
-// 将两路ADC采样值分离保存的数组
+// 后缀 _1 / _2 表示扫描序列的第一 / 第二通道，不是 ADC1 / ADC2 外设编号。
 uint16_t adc_buffer_1[ADC_BUFFER_SIZE / 2] = {0};
 uint16_t adc_buffer_2[ADC_BUFFER_SIZE / 2] = {0};
 
-// 定义adc采样模式
+// 1: ADC1 采 C(PC2) 与 A 输出反馈(PC3)；2: ADC2 采 C(PC0) 与 B 输出反馈(PC1)。
+// 两个 ADC 在相位反馈阶段交替使用，不是四通道同时采样。
 uint8_t adc_mode = 1;
 
 // 定义fft相关变量
@@ -140,36 +142,37 @@ float32_t fft_output_magnitude_2[FFT_SIZE];
 // 定义采样分辨率
 float32_t freq_resolution = 0;
 
-// 定义系统模式
+// 4 为题目自动分离模式；0/1、2/3 分别用于两组 ADC 的原始数据/频谱调试。
 int8_t system_mode = 4;
-// 定义完整功能的系统模式
+// 记录已完成的波形判别轮数；达到 WAVE_TYPE_COUNT_MAX 后转入相位反馈。
 uint8_t system_mode_full = 0;
 // 定义保存tim8的ARR值的变量
 uint16_t tim8_arr = 0;
 
-// 定义两个基波的频率
+// 单位 Hz；freq_1 始终对应低频 A，freq_2 对应高频 B，满足题目 fA < fB。
 uint32_t freq_1 = 0;
 uint32_t freq_2 = 0;
 // 定义基波与谐波的频率比
 float32_t freq_1_rate = 0;
 float32_t freq_2_rate = 0;
 
-// 定义波的类型：1正弦波，2三角波
+// 当前有效分支使用 0=正弦波、1=三角波；下方 #if 0 的旧实现曾使用 1/2。
 uint8_t wave_1_type = 0;
 uint8_t wave_2_type = 0;
 // 定义计数上限
 #define WAVE_TYPE_COUNT_MAX 3
-// 定义波类型计数
+// 统计被判为三角波的轮数，其余轮次视为正弦波，最后以多数票决定波形。
 uint16_t wave_1_type_count = 0;
 uint16_t wave_2_type_count = 0;
-// 定义相位
+// DDS 相位寄存器累计值，不是角度；一周对应 4096 个相位码。
 int16_t phase_1 = 0;
 int16_t phase_2 = 0;
 
-// 定义相位差
+// 用户调相设置，单位度；按键每次 5 度，串口每次 1 度，在 B 路误差中扣除。
+// 题目初相位以 A 输出的时间原点定义；不同频率的瞬时相位差不能直接等同于初相位。
 float32_t phase_diff = 0.0;
 
-// 定义频率步进
+// 发挥部分的频率为 5 kHz 整数倍；该归整网格也覆盖基础部分的 10 kHz 步进。
 #define FREQ_STEP 5000
 
 void ADMIN_Init(void)
@@ -194,10 +197,10 @@ void ADMIN_Init(void)
   HAL_Delay(10);
 
   AD9833_CS_Select = 0;
-  AD9833_SetFrequencyQuick(0, AD9833_OUT_SINUS); // 写输出频率1000.0Hz,输出正弦波
+  AD9833_SetFrequencyQuick(0, AD9833_OUT_SINUS); // 识别前将频率设为 0 Hz，保留正弦输出模式
   HAL_Delay(10);
   AD9833_CS_Select = 1;
-  AD9833_SetFrequencyQuick(0, AD9833_OUT_SINUS); // 写输出频率1000.0Hz,输出正弦波
+  AD9833_SetFrequencyQuick(0, AD9833_OUT_SINUS); // 识别前将频率设为 0 Hz，保留正弦输出模式
   HAL_Delay(10);
 
   LCD_Init();
@@ -212,7 +215,8 @@ void ADMIN_Init(void)
   // 初始化fft句柄
   arm_rfft_fast_init_f32(&fft_handler, FFT_SIZE);
 
-  // 定义频率分辨率
+  // TIM8: 160 MHz / (39+1) / (3+1) = 1 MHz，每次触发完成两通道顺序转换。
+  // 每通道 FFT 的频率间隔为 1 MHz / 2048，约 488.28 Hz，不是 FREQ_STEP。
   freq_resolution = 1.0 * 160000000.0 / (htim8.Instance->PSC + 1) / (htim8.Instance->ARR + 1) / FFT_SIZE;
   // // 初始化dac输出缓冲区，sine波
   // for (uint16_t i = 0; i < DAC_BUFFER_SIZE; i++)
@@ -402,7 +406,8 @@ void ADMIN_Mainloop(void)
     //   }
     // }
 
-    // 将两路adc采样数据分离
+    // DMA 完成中断已停止当前采样，此处处理这一帧快照。
+    // 偶数位置是 C，奇数位置是反馈；两者属于同次触发，但顺序转换存在时间差。
     for (uint16_t i = 0; i < ADC_BUFFER_SIZE; i++)
     {
       if (i % 2 == 0)
@@ -420,7 +425,7 @@ void ADMIN_Mainloop(void)
     {
       fft_input[i] = (float32_t)adc_buffer_1[i] * 3.3 / 4096;
     }
-    // 计算fft
+    // 最后一个参数 0 表示正向 FFT；两通道独立变换，用于比较同频成分的相位。
     arm_rfft_fast_f32(&fft_handler, fft_input, fft_output_1, 0);
 
     // 计算fft幅值
@@ -461,11 +466,12 @@ void ADMIN_Mainloop(void)
       }
     }
 
-    // 找出第一个adc中的最大值和第二大值
+    // 在混合信号频谱中找两个主峰；_1_1 / _1_2 是幅度排序，不是 A / B 的频率排序。
+    // 从 1 开始跳过直流位置，在正频率半区搜索基波。
     uint16_t max_index_1_1 = 1;
     uint16_t max_index_1_2 = 1;
-    // 要找出最大峰值和第二大峰值，有频谱泄露，
-    // 如果确定一个值是峰值的话，不再对其周围5k范围内的值进行比较
+    // 第二峰避开主峰约正负 2.5 kHz（总宽约 5 kHz），避免把泄漏谱线当成另一路。
+    // 2500 / freq_resolution 将频率间隔换算成 FFT bin 数。
     // 先找到最大值
     for (uint16_t i = 1; i < FFT_SIZE / 2; i++)
     {
@@ -487,7 +493,8 @@ void ADMIN_Mainloop(void)
     }
     // 得到最大峰值的频率
     float32_t max_freq_1_1 = (float32_t)(1.0 * max_index_1_1 / FFT_SIZE * 160 * 1000 * 1000 / (htim8.Instance->PSC + 1) / (htim8.Instance->ARR + 1));
-    // 得到最大值的频率对应的相位
+    // 对非直流、非奈奎斯特 bin k，实数 FFT 的实部/虚部分别位于 2*k、2*k+1。
+    // atan2f 返回弧度，后续统一转换成度，再与输出反馈相位比较。
     float32_t max_phase_1_1 = atan2f(fft_output_1[max_index_1_1 * 2 + 1], fft_output_1[max_index_1_1 * 2]);
     // 弧度转换成角度
     max_phase_1_1 = max_phase_1_1 * 180 / 3.1415926;
@@ -547,7 +554,8 @@ void ADMIN_Mainloop(void)
       // 定义本轮测量的基波频率
       uint32_t freq_1_this = 0;
       uint32_t freq_2_this = 0;
-      // 计算两个基波的频率
+      // 先按频率排序，再就近归整到题目的 5 kHz 网格；恰好半步时当前表达式向下取。
+      // DDS 使用归整后的 freq_1/2，反馈相位仍取实际检测到的 FFT bin。
       if (max_freq_1_1 < max_freq_1_2)
       {
         freq_1_this = ((uint32_t)(max_freq_1_1) % FREQ_STEP) > FREQ_STEP / 2 ? (uint32_t)(max_freq_1_1 / FREQ_STEP + 1) * FREQ_STEP : (uint32_t)(max_freq_1_1 / FREQ_STEP) * FREQ_STEP;
@@ -558,7 +566,7 @@ void ADMIN_Mainloop(void)
         freq_1_this = ((uint32_t)(max_freq_1_2) % FREQ_STEP) > FREQ_STEP / 2 ? (uint32_t)(max_freq_1_2 / FREQ_STEP + 1) * FREQ_STEP : (uint32_t)(max_freq_1_2 / FREQ_STEP) * FREQ_STEP;
         freq_2_this = ((uint32_t)(max_freq_1_1) % FREQ_STEP) > FREQ_STEP / 2 ? (uint32_t)(max_freq_1_1 / FREQ_STEP + 1) * FREQ_STEP : (uint32_t)(max_freq_1_1 / FREQ_STEP) * FREQ_STEP;
       }
-      // 判断无信号
+      // 0.1 是按 3.3 V 标定并归一化后的主峰幅值门限，不是题目的 1 V 峰峰值指标。
       if (fft_output_magnitude_1[max_index_1_1] < 0.1)
       {
 
@@ -592,6 +600,7 @@ void ADMIN_Mainloop(void)
         }
       }
 
+      // 识别阶段先确认归整后的频率组合，只有本帧与已存频率相同时才进行波形投票。
       else if (system_mode_full < WAVE_TYPE_COUNT_MAX)
       {
 
@@ -607,17 +616,16 @@ void ADMIN_Mainloop(void)
 
           // 判断波形
 
-          // 如果freq_2不是freq_1的3倍，
-          // 即不是freq_1==20000&&freq_2==60000
-          // 不是freq_1==25000&&freq_2==75000
-          // 不是freq_1==30000&&freq_2==90000
-          // 即可用谐波方式判断
+          // 正弦波主要含基波，理想三角波的三次谐波/基波幅度约为 1/9。
+          // 若 fB=3*fA，A 的三次谐波与 B 的基波重叠，不能再用该谱峰判断 A 的波形。
+          // 题目范围内对应 20/60、25/75、30/90 kHz，下方特殊分支改查五次谐波。
           if (freq_1 * 3 != freq_2)
           {
             uint16_t max_index_1_1_harmonic = 0;
             uint16_t max_index_1_2_harmonic = 0;
 
-            // 定义谐波位置最大值的索引，搜索范围为谐波的正负2.5k以内
+            // 在三次谐波附近正负 2.5 kHz 搜索局部峰，容纳基波定位误差和频谱泄漏。
+            // 扩展题目频率范围或修改采样率时，应同时核对谐波窗口与有效频谱边界。
             max_index_1_1_harmonic = max_index_1_1 * 3 - (uint32_t)(FREQ_STEP / freq_resolution / 2);
             for (uint16_t i = max_index_1_1 * 3 - (uint32_t)(FREQ_STEP / freq_resolution / 2); i < max_index_1_1 * 3 + (uint32_t)(FREQ_STEP / freq_resolution / 2); i++)
             {
@@ -643,6 +651,8 @@ void ADMIN_Mainloop(void)
             //          max_index_1_1, max_index_1_1_harmonic, fft_output_magnitude_1[max_index_1_1], fft_output_magnitude_1[max_index_1_1_harmonic], fft_output_magnitude_1[max_index_1_1_harmonic] / fft_output_magnitude_1[max_index_1_1],
             //          max_index_1_2, max_index_1_2_harmonic, fft_output_magnitude_1[max_index_1_2], fft_output_magnitude_1[max_index_1_2_harmonic], fft_output_magnitude_1[max_index_1_2_harmonic] / fft_output_magnitude_1[max_index_1_2]);
             // HAL_UART_Transmit(&huart1, (uint8_t *)tx_buffer, strlen(tx_buffer), 0xffff);
+            // 2% 为工程判别阈值，不是理想三角波的 1/9；通过相对基波幅值降低幅度影响。
+            // 两个峰按幅度编号，投票前必须根据频率大小映射回低频 A / 高频 B。
             if (fft_output_magnitude_1[max_index_1_1_harmonic] > 0.02 * (fft_output_magnitude_1[max_index_1_1]))
             {
               if (max_freq_1_1 < max_freq_1_2)
@@ -709,7 +719,8 @@ void ADMIN_Mainloop(void)
             uint16_t max_index_1_1_harmonic = 0;
             uint16_t max_index_1_2_harmonic = 0;
 
-            // 定义谐波位置最大值的索引，搜索范围为谐波的正负2.5k以内
+            // 三倍频重叠时，两路都改查五次谐波；三角波理论幅度比为 1/25。
+            // 后面采用 1% 工程阈值，本分支针对三倍频关系，不是任意谐波重叠的通用消除。
             max_index_1_1_harmonic = max_index_1_1 * 5 - (uint32_t)(FREQ_STEP / freq_resolution / 2);
             for (uint16_t i = max_index_1_1 * 5 - (uint32_t)(FREQ_STEP / freq_resolution / 2); i < max_index_1_1 * 5 + (uint32_t)(FREQ_STEP / freq_resolution / 2); i++)
             {
@@ -796,6 +807,7 @@ void ADMIN_Mainloop(void)
               }
             }
           }
+          // 每轮分别给 A、B 投票；三轮结束后比较三角波票数与其余票数，再统一配置 DDS。
           system_mode_full++;
           if (system_mode_full == WAVE_TYPE_COUNT_MAX)
           {
@@ -912,7 +924,8 @@ freq_2:%d\twave_2_type:%d\twave_2_type_count:%d\n\
       else
       {
 
-        // 检查是否有频率变化
+        // 归整后的频率组合变化才自动重新识别；频率不变时继续反馈，不重复进行波形投票。
+        // 因此仅改变输入波形而不改变频率时，可通过启动/重识别操作清空统计。
         if (freq_1_this != freq_1 || freq_2_this != freq_2)
         {
           system_mode_full = 0;
@@ -922,7 +935,7 @@ freq_2:%d\twave_2_type:%d\twave_2_type_count:%d\n\
         else
         {
 
-          // 获取最大值的索引
+          // 第二扫描通道是当前 DDS 的单路反馈，取其主峰相位，与 C 中对应基波比较。
           uint16_t max_index_2 = 1;
           // 过滤直流分量
           for (uint16_t i = 1; i < FFT_SIZE; i++)
@@ -932,13 +945,16 @@ freq_2:%d\twave_2_type:%d\twave_2_type_count:%d\n\
               max_index_2 = i;
             }
           }
-          // 得到最大值的频率，采样率是定时15的频率
+          // 将反馈谱峰索引换算为 Hz，采样时钟来自 TIM8。
           float32_t max_freq_2 = (float32_t)(1.0 * max_index_2 * 160 * 1000 * 1000 / (htim8.Instance->PSC + 1) / (htim8.Instance->ARR + 1)) / FFT_SIZE;
           // 得到最大值的频率对应的相位
           float32_t max_phase_2 = atan2f(fft_output_2[max_index_2 * 2 + 1], fft_output_2[max_index_2 * 2]);
           // 弧度转换成角度
           max_phase_2 = max_phase_2 * 180 / 3.1415926;
 
+          // 误差单位为度：混合信号中目标基波的相位 - 当前反馈相位 + 链路补偿。
+          // 1.351/10000 的单位为度/Hz，属于现有链路补偿系数，改硬件/采样时需重新标定。
+          // A 跟随低频成分，B 跟随高频成分并扣除 phase_diff；不要按主峰幅度大小选 A/B。
           float32_t diff = 0.0;
           if (adc_mode == 1)
           {
@@ -962,6 +978,7 @@ freq_2:%d\twave_2_type:%d\twave_2_type_count:%d\n\
               diff = max_phase_1_1 - max_phase_2 + 1.351 / 10000 * max_freq_1_1 - phase_diff;
             }
           }
+          // 跨越正负 180 度时修正一周，避免把边界两侧的相近相位当成长距离调相。
           if (diff > 180)
           {
             diff -= 360;
@@ -970,7 +987,8 @@ freq_2:%d\twave_2_type:%d\twave_2_type_count:%d\n\
           {
             diff += 360;
           }
-          // 根绝adc模式进行锁相
+          // 按当前反馈链路累加 DDS 相位码：4096 对应一周，整数转换会截去不足一码的部分。
+          // 这里更新相位而不重设频率；写入后切到另一路，在后续帧继续交替校正。
           if (adc_mode == 1)
           {
 
@@ -1431,6 +1449,7 @@ PSC:%d \tARR:%d\r\n\r\n\
   }
   else if (system_mode == 4)
   {
+    // 两个 ADC 共用 adc_buffer 和完成标志，当前流程只选择其中一路启动采样。
     if (adc_mode == 1)
 
       HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_buffer, ADC_BUFFER_SIZE);
