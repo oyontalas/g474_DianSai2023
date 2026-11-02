@@ -6,6 +6,8 @@
 
 ### Signal Separation with FFT, Dual DDS & Phase Feedback
 
+[@oyontalas](https://github.com/oyontalas)
+
 **2023 年全国大学生电子设计竞赛 · H 题 · 国家一等奖**
 
 从一路混合信号中，恢复两路信号的频率、波形与相位。<br />
